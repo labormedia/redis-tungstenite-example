@@ -8,8 +8,8 @@ use redis::{
 
 #[tokio::main]
 async fn main() -> Result<(), Box<(dyn std::error::Error + 'static)>> {
-    let client = redis::Client::open("redis://127.0.0.1/").unwrap();
-    let con = client.get_multiplexed_tokio_connection().await.unwrap();
+    let client = redis::Client::open("redis://172.17.0.2/").unwrap();
+    let con = client.get_multiplexed_tokio_connection().await?;
     let connect_addr =
         env::args().nth(1).unwrap_or_else(|| panic!("this program requires at least one argument"));
 
@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<(dyn std::error::Error + 'static)>> {
 
     let (write, read) = ws_stream.split();
 
-    read.fold(write, |write, m| async {
+    let _ = read.fold(write, |write, m| async {
         match m  {
             // Error here...
             // tungstenite::error::Error
@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<(dyn std::error::Error + 'static)>> {
                 ()
             },
             Ok(message) => {
-                send_to_redis_stream(message, &con).await;
+                let _ = send_to_redis_stream(message, &con).await;
                 ()
             },
         };
