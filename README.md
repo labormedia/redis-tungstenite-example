@@ -3,7 +3,7 @@ Rust Tests
 Tests on using tokio_tungstenite + redis::aio::MultiplexedConnection.
 
 # Build
-`cargo build --release`
+```cargo build --release```
 
 # Test
-`cargo test all`
+```cargo test all```
