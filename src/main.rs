@@ -71,8 +71,9 @@ mod tests {
     use std::env;
 
     use futures_util::{future, pin_mut, StreamExt};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::{io::{AsyncReadExt, AsyncWriteExt}, sync::oneshot::error};
     use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+    use tungstenite::{handshake::server::ErrorResponse, http::Error};
     static ADDRESS: &str = "127.0.0.1:12345";
     static WS_PREFIX: &'static str = "ws://";
 
@@ -94,19 +95,28 @@ mod tests {
     
     type Tx = UnboundedSender<Message>;
     type PeerMap = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
+
+    struct Server {
+        listener: TcpListener,
+        state: Arc<Mutex<HashMap<SocketAddr, UnboundedSender<Message>>>>
+    }
     
-    #[test]
-    fn all() {
+    #[tokio::test]
+    async fn all() {
         let WS_ADDRESS= WS_PREFIX.to_owned() + ADDRESS;
         let message = "assert message";
         println!("Starting test");
-        start_server(ADDRESS);
+        let connection = start_server(ADDRESS).await.unwrap();
+
+        // Let's spawn the handling of each connection in a separate task.
+        while let Ok((stream, addr)) = connection.listener.accept().await {
+            tokio::spawn(handle_connection(connection.state.clone(), stream, addr));
+        }
         start_client(WS_ADDRESS.as_str());
         println!("test completed.")
     }
 
     // Client needs a server
-    #[tokio::main]
     async fn start_client(ws_address:&str) {
         println!("client");
         use super::*;
@@ -188,8 +198,9 @@ mod tests {
         peer_map.lock().unwrap().remove(&addr);
     }
     
-    #[tokio::main]
-    async fn start_server(ws_address: &str) -> Result<(), IoError> {
+    async fn start_server(ws_address: &str) -> Result<Server, IoError> {
+        // Arc<Mutex<HashMap<SocketAddr, UnboundedSender<Message>>>
+        // 
         // let addr = env::args().nth(1).unwrap_or_else(|| "127.0.0.1:8080".to_string());
         let addr = ws_address;
     
@@ -199,13 +210,13 @@ mod tests {
         let try_socket = TcpListener::bind(&addr).await;
         let listener = try_socket.expect("Failed to bind");
         println!("Listening on: {}", addr);
+
+        let server = Server {
+            listener,
+            state
+        };
     
-        // Let's spawn the handling of each connection in a separate task.
-        while let Ok((stream, addr)) = listener.accept().await {
-            tokio::spawn(handle_connection(state.clone(), stream, addr));
-        }
-    
-        Ok(())
+        Ok(server)
     }
 }
 
