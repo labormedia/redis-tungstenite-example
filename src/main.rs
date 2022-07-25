@@ -108,11 +108,11 @@ mod tests {
         println!("Starting test");
         let connection = start_server(ADDRESS).await.unwrap();
 
+        start_client(WS_ADDRESS.as_str()).await;
         // Let's spawn the handling of each connection in a separate task.
         while let Ok((stream, addr)) = connection.listener.accept().await {
             tokio::spawn(handle_connection(connection.state.clone(), stream, addr));
         }
-        start_client(WS_ADDRESS.as_str());
         println!("test completed.")
     }
 
