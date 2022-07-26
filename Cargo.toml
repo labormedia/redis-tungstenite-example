@@ -7,7 +7,7 @@ edition = "2018"
 
 [dependencies]
 tungstenite = { version= "*", features= ["rustls-tls"]}
-tokio = { version= "*", features = ["full"] }
+tokio = { version= "*", features = ["full", "time"] }
 futures-channel = "*"
 futures-util = "*"
 tokio-tungstenite = { version= "*", features= ["rustls-tls"] }

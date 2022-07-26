@@ -69,13 +69,15 @@ mod tests {
 
     // Client requirements.
     use std::env;
-
+    use tokio::time::sleep;
+    use std::time::Duration;
     use futures_util::{future, pin_mut, StreamExt};
     use tokio::{io::{AsyncReadExt, AsyncWriteExt}, sync::oneshot::error};
     use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
     use tungstenite::{handshake::server::ErrorResponse, http::Error};
     static ADDRESS: &str = "127.0.0.1:12345";
     static WS_PREFIX: &'static str = "ws://";
+    static TIMEOUT: u64 = 1000;
 
     // Server requirements
     use std::{
@@ -100,67 +102,93 @@ mod tests {
         listener: TcpListener,
         state: Arc<Mutex<HashMap<SocketAddr, UnboundedSender<Message>>>>
     }
+
+    struct TestInstance {
+        prefix: String,
+        address: String,
+        message: String,
+    }
     
     #[tokio::test]
     async fn all() {
-        let WS_ADDRESS= WS_PREFIX.to_owned() + ADDRESS;
-        let message = "assert message";
+        let test = TestInstance {
+            prefix: WS_PREFIX.to_owned(),
+            address: ADDRESS.to_owned(),
+            message: "assert message".to_string(),
+        };
         println!("Starting test");
-        let connection = start_server(ADDRESS).await.unwrap();
 
-        start_client(WS_ADDRESS.as_str()).await;
         // Let's spawn the handling of each connection in a separate task.
-        while let Ok((stream, addr)) = connection.listener.accept().await {
-            tokio::spawn(handle_connection(connection.state.clone(), stream, addr));
-        }
+        if let Ok(server) = start_server(&test.address).await {
+            println!("Server started.");
+            tokio::spawn(start_client(test));
+        
+            println!("inside test loop");
+            while let Ok((stream, addr)) = server.listener.accept().await {
+                println!("Connection accepted.");
+                tokio::spawn(handle_connection(server.state.clone(), stream, addr, "assert message".to_string()));
+                sleep (Duration::from_millis(TIMEOUT)).await
+            }
+            
+
+        };
+
         println!("test completed.")
     }
 
     // Client needs a server
-    async fn start_client(ws_address:&str) {
-        println!("client");
+    async fn start_client(test: TestInstance) {
+        println!("Starting client.");
         use super::*;
         let connect_addr =
             env::args().nth(1).unwrap_or_else(|| panic!("this program requires at least one argument"));
     
-        let url = url::Url::parse(&ws_address).unwrap();
+        let url = url::Url::parse(&format!("{}{}",test.prefix, test.address)).unwrap();
     
-        let (stdin_tx, stdin_rx) = futures_channel::mpsc::unbounded();
-        tokio::spawn(read_stdin(stdin_tx));
-    
-        let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
+        if let (ws_stream, _) = connect_async(&url).await.unwrap() {
+            
+            let (stdin_tx, stdin_rx) = futures_channel::mpsc::unbounded();
+            tokio::spawn(send_message(stdin_tx, test));
+            let (write, read) = ws_stream.split();
+            let stdin_to_ws = stdin_rx.map(Ok).forward(write);
+            let ws_to_stdout = {
+                read.for_each(|message| async {
+                    let data = message.unwrap().into_data();
+                    tokio::io::stdout().write_all(&data).await.unwrap();
+                })
+            };
+        
+            pin_mut!(stdin_to_ws, ws_to_stdout);
+            future::select(stdin_to_ws, ws_to_stdout).await;
+        };
         println!("WebSocket handshake has been successfully completed");
     
-        let (write, read) = ws_stream.split();
+
     
-        let stdin_to_ws = stdin_rx.map(Ok).forward(write);
-        let ws_to_stdout = {
-            read.for_each(|message| async {
-                let data = message.unwrap().into_data();
-                tokio::io::stdout().write_all(&data).await.unwrap();
-            })
-        };
-    
-        pin_mut!(stdin_to_ws, ws_to_stdout);
-        future::select(stdin_to_ws, ws_to_stdout).await;
+
     }
     
     // Our helper method which will read data from stdin and send it along the
     // sender provided.
-    async fn read_stdin(tx: futures_channel::mpsc::UnboundedSender<Message>) {
-        let mut stdin = tokio::io::stdin();
+    async fn send_message(tx: futures_channel::mpsc::UnboundedSender<Message>, test: TestInstance) {
+        // let mut stdin = tokio::io::stdin();
         loop {
-            let mut buf = vec![0; 1024];
-            let n = match stdin.read(&mut buf).await {
-                Err(_) | Ok(0) => break,
-                Ok(n) => n,
-            };
-            buf.truncate(n);
-            tx.unbounded_send(Message::binary(buf)).unwrap();
+            sleep (Duration::from_millis(TIMEOUT)).await;
+            // let mut buf = vec![0; 1024];
+            // let n = match stdin.read(&mut buf).await {
+            //     Err(_) | Ok(0) => break,
+            //     Ok(n) => n,
+            // };
+            let message = test.message.as_bytes();
+            // let n = message.len();
+
+            println!("Sending message: {:?}", message);
+            // buf.truncate(n);
+            tx.unbounded_send(Message::binary(message)).unwrap();
         }
     }
     
-    async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: SocketAddr) {
+    async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: SocketAddr, message: String) {
         println!("Incoming TCP connection from: {}", addr);
     
         let ws_stream = tokio_tungstenite::accept_async(raw_stream)
@@ -185,6 +213,8 @@ mod tests {
             for recp in broadcast_recipients {
                 recp.unbounded_send(msg.clone()).unwrap();
             }
+
+            assert_eq!(msg.clone().to_text().unwrap(), message);
     
             future::ok(())
         });
@@ -198,23 +228,26 @@ mod tests {
         peer_map.lock().unwrap().remove(&addr);
     }
     
-    async fn start_server(ws_address: &str) -> Result<Server, IoError> {
+    async fn start_server(address: &str) -> Result<Server, IoError> {
         // Arc<Mutex<HashMap<SocketAddr, UnboundedSender<Message>>>
         // 
-        // let addr = env::args().nth(1).unwrap_or_else(|| "127.0.0.1:8080".to_string());
-        let addr = ws_address;
+        // let addr = env::args().nth(1).unwrap_or_else(|| "127.0.0.1:12345".to_string());
+        // let addr = "127.0.0.1:12345";
+        println!("Connecting to {:?}", address);
     
         let state = PeerMap::new(Mutex::new(HashMap::new()));
     
         // Create the event loop and TCP listener we'll accept connections on.
-        let try_socket = TcpListener::bind(&addr).await;
+        let try_socket = TcpListener::bind(&address).await;
         let listener = try_socket.expect("Failed to bind");
-        println!("Listening on: {}", addr);
+        println!("Listening on: {}", address);
 
         let server = Server {
             listener,
             state
         };
+
+
     
         Ok(server)
     }
