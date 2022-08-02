@@ -7,3 +7,6 @@ Tests on using tokio_tungstenite + redis::aio::MultiplexedConnection.
 
 # Test
 ```cargo test all```
+
+# Debug
+```RUST_BACKTRACE=1 cargo test all --bin redis-tungstenite-example -- --nocapture```
