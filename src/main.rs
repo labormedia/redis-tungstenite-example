@@ -77,7 +77,7 @@ mod tests {
     use tungstenite::{handshake::server::ErrorResponse, http::Error};
     static ADDRESS: &str = "127.0.0.1:12345";
     static WS_PREFIX: &'static str = "ws://";
-    static TIMEOUT: u64 = 10;
+    static TIMEOUT: u64 = 10000;
 
     // Server requirements
     use std::{
@@ -114,19 +114,20 @@ mod tests {
         let test = TestInstance {
             prefix: WS_PREFIX.to_owned(),
             address: ADDRESS.to_owned(),
-            message: "assert message".to_string(),
+            message: "assert message\n".to_string(),
         };
         println!("Starting test");
 
         // Let's spawn the handling of each connection in a separate task.
         if let Ok(server) = start_server(&test.address).await {
-            println!("Server started.");
+            println!("Starting server.");
+            let test_message = &test.message.clone();
             tokio::spawn(start_client(test));
         
             println!("inside test loop");
             while let Ok((stream, addr)) = server.listener.accept().await {
                 println!("Connection accepted.");
-                tokio::spawn(handle_connection(server.state.clone(), stream, addr, "assert message".to_string()));
+                tokio::spawn(handle_connection(server.state.clone(), stream, addr, test_message.to_string()));
                 sleep (Duration::from_millis(TIMEOUT)).await
             }
             
