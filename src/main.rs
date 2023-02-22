@@ -99,8 +99,9 @@ mod tests {
     fn all() {
         let WS_ADDRESS= WS_PREFIX.to_owned() + ADDRESS;
         let message = "assert message";
-        println!("Starting test");
-        start_server(ADDRESS);
+        println!("Starting server");
+        std::thread::spawn( || { start_server(ADDRESS) } );
+        println!("Starting client");
         start_client(WS_ADDRESS.as_str());
         println!("test completed.")
     }
